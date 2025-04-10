@@ -170,7 +170,7 @@ public class ApiConfig {
         return configUrl;
     }
     public void loadConfig(boolean useCache, LoadConfigCallback callback, Activity activity) {
-        String apiUrl = Hawk.get(HawkConfig.API_URL, "");
+        String apiUrl = Hawk.get(HawkConfig.API_URL, "https://web.opendrive.com/api/v1/download/file.json/NjBfOTA3ODA1ODdf?temp_key=%99%AA-%C6&inline=1");
         //独立加载直播配置
         String liveApiUrl = Hawk.get(HawkConfig.LIVE_API_URL, "");
         String liveApiConfigUrl=configUrl(liveApiUrl);
