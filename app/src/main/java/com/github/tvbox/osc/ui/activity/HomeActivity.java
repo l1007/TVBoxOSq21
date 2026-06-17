@@ -6,6 +6,7 @@ import android.animation.AnimatorSet;
 import android.animation.IntEvaluator;
 import android.animation.ObjectAnimator;
 import android.annotation.SuppressLint;
+import android.app.ActivityManager;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.os.Bundle;
@@ -73,6 +74,7 @@ import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 import java.util.Objects;
 
 import me.jessyan.autosize.utils.AutoSizeUtils;
@@ -96,13 +98,13 @@ public class HomeActivity extends BaseActivity {
     public View sortFocusView = null;
     private final Handler mHandler = new Handler();
     private long mExitTime = 0;
+    private boolean eventBusRegistered = false;
     private final Runnable mRunnable = new Runnable() {
-        @SuppressLint({"DefaultLocale", "SetTextI18n"})
+        @SuppressLint("SetTextI18n")
         @Override
         public void run() {
             Date date = new Date();
-            @SuppressLint("SimpleDateFormat")
-            SimpleDateFormat timeFormat = new SimpleDateFormat("yyyy/MM/dd HH:mm");
+            SimpleDateFormat timeFormat = new SimpleDateFormat("yyyy/MM/dd  E  HH:mm", Locale.CHINA);
             tvDate.setText(timeFormat.format(date));
             mHandler.postDelayed(this, 1000);
         }
@@ -118,6 +120,7 @@ public class HomeActivity extends BaseActivity {
     @Override
     protected void init() {
         EventBus.getDefault().register(this);
+        eventBusRegistered = true;
         ControlManager.get().startServer();
         initView();
         initViewModel();
@@ -476,8 +479,8 @@ public class HomeActivity extends BaseActivity {
     @SuppressLint("NotifyDataSetChanged")
     @Override
     public void onBackPressed() {
-        //打断加载
-        if(isLoading()){
+        // 打断加载
+        if (isLoading()) {
             refreshEmpty();
             return;
         }
@@ -504,35 +507,40 @@ public class HomeActivity extends BaseActivity {
             // 如果 sortFocusView 存在且没有获取焦点，则请求焦点
             if (this.sortFocusView != null && !this.sortFocusView.isFocused()) {
                 this.sortFocusView.requestFocus();
-                return;
             }
             // 如果当前不是第一个界面，则将列表设置到第一项
             else if (this.sortFocused != 0) {
                 this.mGridView.setSelection(0);
-                return;
             } else {
                 doExit();
-                return;
             }
         } else if (baseLazyFragment instanceof UserFragment && UserFragment.tvHotList.canScrollVertically(-1)) {
             // 如果 UserFragment 列表可以向上滚动，则滚动到顶部
             UserFragment.tvHotList.scrollToPosition(0);
             this.mGridView.setSelection(0);
-            return;
         } else {
             doExit();
-            return;
         }
     }
 
     private void doExit() {
         // 如果两次返回间隔小于 2000 毫秒，则退出应用
         if (System.currentTimeMillis() - mExitTime < 2000) {
-            EventBus.getDefault().unregister(this);
-            AppManager.getInstance().appExit(0);
+            unregisterEventBus();
             ControlManager.get().stopServer();
-            finish();
-            System.exit(0);
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.LOLLIPOP) {
+                ActivityManager activityManager = (ActivityManager) getSystemService(ACTIVITY_SERVICE);
+                if (activityManager != null) {
+                    for (ActivityManager.AppTask appTask : activityManager.getAppTasks()) {
+                        appTask.finishAndRemoveTask();
+                    }
+                } else {
+                    finishAndRemoveTask();
+                }
+            } else {
+                AppManager.getInstance().finishAllActivity();
+                finish();
+            }
         } else {
             // 否则仅提示用户，再按一次退出应用
             mExitTime = System.currentTimeMillis();
@@ -550,7 +558,7 @@ public class HomeActivity extends BaseActivity {
     @Override
     protected void onPause() {
         super.onPause();
-        mHandler.removeCallbacksAndMessages(null);
+        mHandler.removeCallbacks(mRunnable);
     }
 
     @Subscribe(threadMode = ThreadMode.MAIN)
@@ -666,9 +674,17 @@ public class HomeActivity extends BaseActivity {
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        EventBus.getDefault().unregister(this);
-        AppManager.getInstance().appExit(0);
-        ControlManager.get().stopServer();
+        unregisterEventBus();
+        if (isFinishing()) {
+            ControlManager.get().stopServer();
+        }
+    }
+
+    private void unregisterEventBus() {
+        if (eventBusRegistered) {
+            EventBus.getDefault().unregister(this);
+            eventBusRegistered = false;
+        }
     }
 
     private SelectDialog<SourceBean> mSiteSwitchDialog;

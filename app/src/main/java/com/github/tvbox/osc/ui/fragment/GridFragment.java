@@ -6,6 +6,8 @@ import android.view.LayoutInflater;
 import android.view.View;
 import android.view.animation.BounceInterpolator;
 
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.core.content.ContextCompat;
 import androidx.lifecycle.Observer;
 import androidx.lifecycle.ViewModelProvider;
@@ -91,6 +93,15 @@ public class GridFragment extends BaseLazyFragment {
     }
 
     @Override
+    public void onViewCreated(@NonNull View view, @Nullable Bundle savedInstanceState) {
+        super.onViewCreated(view, savedInstanceState);
+        TvRecyclerView gridView = view.findViewById(R.id.mGridView);
+        if (gridView != null && gridView.getLayoutManager() == null) {
+            gridView.setLayoutManager(new V7LinearLayoutManager(mContext, 1, false));
+        }
+    }
+
+    @Override
     protected void init() {
         initView();
         initViewModel();
@@ -111,7 +122,7 @@ public class GridFragment extends BaseLazyFragment {
     public boolean isFolederMode(){ return (getUITag() =='1'); }
     // 获取当前页面UI的显示模式 ‘0’ 正常模式 '1' 文件夹模式 '2' 显示缩略图的文件夹模式
     public char getUITag(){
-        return (sortData == null || sortData.flag == null || sortData.flag.length() ==0 ) ?  '0' : sortData.flag.charAt(0);
+        return (sortData == null || sortData.flag == null || sortData.flag.length() ==0 || style!=null) ?  '0' : sortData.flag.charAt(0);
     }
     // 是否允许聚合搜索 sortData.flag的第二个字符为‘1’时允许聚搜
     public boolean enableFastSearch(){  return sortData.flag == null || sortData.flag.length() < 2 || (sortData.flag.charAt(1) == '1'); }
@@ -174,7 +185,6 @@ public class GridFragment extends BaseLazyFragment {
 
     private void initView() {
         this.createView();
-        mGridView.setAdapter(gridAdapter);
         if(isFolederMode()){
             mGridView.setLayoutManager(new V7LinearLayoutManager(this.mContext, 1, false));
         }else{
@@ -188,6 +198,7 @@ public class GridFragment extends BaseLazyFragment {
                 mGridView.setLayoutManager(new V7GridLayoutManager(mContext, spanCount));
             }
         }
+        mGridView.setAdapter(gridAdapter);
 
         gridAdapter.setOnLoadMoreListener(new BaseQuickAdapter.RequestLoadMoreListener() {
             @Override
@@ -240,12 +251,13 @@ public class GridFragment extends BaseLazyFragment {
                     }
                     else{
                         if(video.id == null || video.id.isEmpty() || video.id.startsWith("msearch:")){
-                            if(Hawk.get(HawkConfig.FAST_SEARCH_MODE, false) && enableFastSearch()){
+                            if(Hawk.get(HawkConfig.FAST_SEARCH_MODE, true) && enableFastSearch()){
                                 jumpActivity(FastSearchActivity.class, bundle);
                             }else {
                                 jumpActivity(SearchActivity.class, bundle);
                             }
                         }else {
+                            bundle.putString("picture", video.pic);
                             jumpActivity(DetailActivity.class, bundle);
                         }
                     }

@@ -6,6 +6,7 @@ import android.text.TextUtils;
 import com.github.tvbox.osc.api.ApiConfig;
 import com.github.tvbox.osc.bean.IJKCode;
 import com.github.tvbox.osc.server.ControlManager;
+import com.github.tvbox.osc.util.AudioTrackMemory;
 import com.github.tvbox.osc.util.FileUtils;
 import com.github.tvbox.osc.util.HawkConfig;
 import com.github.tvbox.osc.util.LOG;
@@ -15,6 +16,7 @@ import com.orhanobut.hawk.Hawk;
 import java.io.File;
 import java.net.URI;
 import java.net.URLEncoder;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -26,10 +28,13 @@ import xyz.doikki.videoplayer.ijk.IjkPlayer;
 public class IjkMediaPlayer extends IjkPlayer {
 
     private IJKCode codec = null;
+    protected String currentPlayPath;
+    private static AudioTrackMemory memory;
 
     public IjkMediaPlayer(Context context, IJKCode codec) {
         super(context);
         this.codec = codec;
+        memory = AudioTrackMemory.getInstance(context);
     }
 
     @Override
@@ -127,6 +132,7 @@ public class IjkMediaPlayer extends IjkPlayer {
         }
         setDataSourceHeader(headers);
         mMediaPlayer.setOption(tv.danmaku.ijk.media.player.IjkMediaPlayer.OPT_CATEGORY_FORMAT, "protocol_whitelist", "ijkio,ffio,async,cache,crypto,file,dash,http,https,ijkhttphook,ijkinject,ijklivehook,ijklongurl,ijksegment,ijktcphook,pipe,rtp,tcp,tls,udp,ijkurlhook,data");
+        currentPlayPath = path;
         super.setDataSource(path, null);
     }
 
@@ -195,6 +201,10 @@ public class IjkMediaPlayer extends IjkPlayer {
                 a.language = info.getLanguage();
                 if(name.startsWith("aac"))a.language="中文";
                 a.name = name;
+                String language = getFriendlyLanguage(a.language, info.getInfoInline());
+                a.language = language;
+                a.name = buildDisplayName("\u97f3\u8f68", data.getAudio().size() + 1, language, name);
+                a.trackId = index;
                 a.index = index;
                 a.selected = index == audioSelected;
                 // 如果需要，还可以检查轨道的描述或标题以获取更多信息
@@ -204,6 +214,10 @@ public class IjkMediaPlayer extends IjkPlayer {
                 TrackInfoBean t = new TrackInfoBean();
                 t.name = info.getInfoInline();
                 t.language = info.getLanguage();
+                String language = getFriendlyLanguage(t.language, t.name);
+                t.language = language;
+                t.name = buildDisplayName("\u5b57\u5e55", data.getSubtitle().size() + 1, language, "");
+                t.trackId = index;
                 t.index = index;
                 t.selected = index == subtitleSelected;
                 data.addSubtitle(t);
@@ -214,9 +228,48 @@ public class IjkMediaPlayer extends IjkPlayer {
     }
     // 处理音轨名称格式
     private String processAudioName(String rawName) {
+        if (rawName == null) return "";
         return rawName.replace("AUDIO,", "")
                 .replace("N/A,", "")
-                .replace(" ", "");
+                .replace(" ", "")
+                .replaceAll("^,+|,+$", "")
+                .replace(",", " / ");
+    }
+
+    private String getFriendlyLanguage(String language, String rawInfo) {
+        String text = ((language == null ? "" : language) + " " + (rawInfo == null ? "" : rawInfo)).toLowerCase();
+        if (text.contains("yue") || text.contains("cantonese") || text.contains("\u7ca4") || text.contains("\u5e7f\u4e1c")) {
+            return "\u7ca4\u8bed";
+        }
+        if (text.contains("zh") || text.contains("chi") || text.contains("zho") || text.contains("chs")
+                || text.contains("cht") || text.contains("cmn") || text.contains("\u4e2d")
+                || text.contains("\u56fd\u8bed") || text.contains("\u666e\u901a\u8bdd")) {
+            return "\u56fd\u8bed";
+        }
+        if (text.contains("en") || text.contains("eng") || text.contains("english") || text.contains("\u82f1")) {
+            return "\u82f1\u8bed";
+        }
+        if (text.contains("ja") || text.contains("jpn") || text.contains("japanese") || text.contains("\u65e5")) {
+            return "\u65e5\u8bed";
+        }
+        if (text.contains("ko") || text.contains("kor") || text.contains("korean") || text.contains("\u97e9")) {
+            return "\u97e9\u8bed";
+        }
+        if (text.contains("tha") || text.contains("thai") || text.contains("th")) {
+            return "\u6cf0\u8bed";
+        }
+        return "";
+    }
+
+    private String buildDisplayName(String prefix, int number, String language, String detail) {
+        StringBuilder builder = new StringBuilder(prefix).append(" ").append(number);
+        if (language != null && !language.isEmpty()) {
+            builder.append(" - ").append(language);
+        }
+        if (detail != null && !detail.isEmpty()) {
+            builder.append(" ").append(detail);
+        }
+        return builder.toString();
     }
 
     public void setTrack(int trackIndex) {
@@ -226,9 +279,29 @@ public class IjkMediaPlayer extends IjkPlayer {
             mMediaPlayer.selectTrack(trackIndex);
         }
     }
+    public void setTrack(int trackIndex,String playKey) {
+        int audioSelected = mMediaPlayer.getSelectedTrack(ITrackInfo.MEDIA_TRACK_TYPE_AUDIO);
+        if (trackIndex!=audioSelected){
+            if (!playKey.isEmpty()) {
+                memory.save(playKey, trackIndex);
+            }
+            mMediaPlayer.selectTrack(trackIndex);
+        }
+    }
 
     public void setOnTimedTextListener(IMediaPlayer.OnTimedTextListener listener) {
         mMediaPlayer.setOnTimedTextListener(listener);
     }
 
+    public void loadDefaultTrack(TrackInfo trackInfo,String playKey) {
+        if(trackInfo!=null && trackInfo.getAudio().size()>1){
+            Integer trackIndex = memory.ijkLoad(playKey);
+            if (trackIndex == -1) {
+                int firsIndex=trackInfo.getAudio().get(0).index;
+                setTrack(firsIndex);
+                return;
+            };
+            setTrack(trackIndex);
+        }
+    }
 }

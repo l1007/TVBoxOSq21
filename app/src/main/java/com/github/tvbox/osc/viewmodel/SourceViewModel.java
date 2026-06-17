@@ -3,6 +3,8 @@ package com.github.tvbox.osc.viewmodel;
 import android.text.TextUtils;
 
 import android.util.Base64;
+import android.os.Handler;
+import android.os.Looper;
 
 import androidx.annotation.NonNull;
 import androidx.lifecycle.MutableLiveData;
@@ -36,6 +38,7 @@ import com.google.gson.reflect.TypeToken;
 import com.lzy.okgo.OkGo;
 import com.lzy.okgo.callback.AbsCallback;
 import com.lzy.okgo.model.Response;
+import com.lzy.okgo.request.GetRequest;
 import com.orhanobut.hawk.Hawk;
 import com.thoughtworks.xstream.XStream;
 import com.thoughtworks.xstream.io.xml.DomDriver;
@@ -64,6 +67,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import okhttp3.Call;
 
@@ -80,6 +84,8 @@ public class SourceViewModel extends ViewModel {
     public MutableLiveData<AbsXml> detailResult;
     public MutableLiveData<JSONObject> playResult;
     public Gson gson;
+    private final Handler mainHandler = new Handler(Looper.getMainLooper());
+    private final AtomicInteger playRequestSeq = new AtomicInteger();
 
     public SourceViewModel() {
         sortResult = new MutableLiveData<>();
@@ -92,19 +98,19 @@ public class SourceViewModel extends ViewModel {
     }
 
     public static final ExecutorService spThreadPool = Executors.newSingleThreadExecutor();
+    private static final ExecutorService httpPrepareThreadPool = Executors.newFixedThreadPool(3);
 
-    //homeContent缓存，最多存储10个sourceKey的AbsSortXml对象
-    private static final Map<String, AbsSortXml> sortCache = new LinkedHashMap<String, AbsSortXml>(10, 0.75f, true) {
+    //homeContent缓存，最多存储5个sourceKey的AbsSortXml对象
+    private static final Map<String, AbsSortXml> sortCache = new LinkedHashMap<String, AbsSortXml>(5, 0.75f, true) {
         @Override
         protected boolean removeEldestEntry(Entry<String, AbsSortXml> eldest) {
-            return size() > 10;
+            return size() > 5;
         }
     };
 
 
     // homeContent
     public void getSort(final String sourceKey) {
-        LOG.i("echo--getSort-start");
         if (sourceKey == null) {
             sortResult.postValue(null);
             return;
@@ -113,7 +119,6 @@ public class SourceViewModel extends ViewModel {
         // 优先检查缓存
         AbsSortXml cached = sortCache.get(sourceKey);
         if (cached != null) {
-            LOG.i("echo--getSort-cached--"+sourceKey);
             int homeRec = Hawk.get(HawkConfig.HOME_REC, 0);
             boolean shouldUseCache = (homeRec != 1) || (cached.videoList != null && !cached.videoList.isEmpty());
             if (shouldUseCache) {
@@ -123,6 +128,11 @@ public class SourceViewModel extends ViewModel {
         }
 
         SourceBean sourceBean = ApiConfig.get().getSource(sourceKey);
+        if (sourceBean == null) {
+            LOG.i("echo--getSort-source-null--" + sourceKey);
+            sortResult.postValue(null);
+            return;
+        }
         if(sourceBean.getName().length()<=3 && sourceBean.getName().endsWith("搜")){
             sortResult.postValue(null);
             return;
@@ -138,17 +148,19 @@ public class SourceViewModel extends ViewModel {
                         @Override
                         public String call() throws Exception {
                             Spider sp = ApiConfig.get().getCSP(sourceBean);
-                            String json=sp.homeContent(true);
-                            return json;
+                            return sp.homeContent(true);
                         }
                     });
                     String sortJson = null;
                     try {
                         sortJson = future.get(20, TimeUnit.SECONDS);
                     } catch (TimeoutException e) {
+                        LOG.i("echo--getSort-timeout--" + sourceBean.getKey());
                         e.printStackTrace();
                         future.cancel(true);
                     } catch (InterruptedException | ExecutionException e) {
+                        Throwable cause = e.getCause();
+                        LOG.i("echo--getSort-error--" + sourceBean.getKey() + "--" + e.getClass().getSimpleName() + "--" + (cause != null ? cause.getClass().getSimpleName() + ":" + cause.getMessage() : e.getMessage()));
                         e.printStackTrace();
                     } finally {
                         if (sortJson != null) {
@@ -184,7 +196,7 @@ public class SourceViewModel extends ViewModel {
                     }
                 }
             };
-            spThreadPool.execute(waitResponse);
+            httpPrepareThreadPool.execute(waitResponse);
         } else if (type == 0 || type == 1) {
             OkGo.<String>get(sourceBean.getApi())
                     .tag(sourceBean.getKey() + "_sort")
@@ -238,11 +250,14 @@ public class SourceViewModel extends ViewModel {
             String extend=sourceBean.getExt();
             extend=getFixUrl(extend);
             if(URLEncoder.encode(extend).length()<1000){
-                OkGo.<String>get(sourceBean.getApi())
+                GetRequest<String> request = OkGo.<String>get(sourceBean.getApi())
                         .tag(sourceBean.getKey() + "_sort")
-                        .params("filter", "true")
-                        .params("extend", extend)
-                        .execute(new AbsCallback<String>() {
+                        .params("filter", "true");
+                // 当 extend 不为空且非空字符串时添加参数
+                if (extend != null && !extend.isEmpty()) {
+                    request.params("extend", extend);
+                }
+                request.execute(new AbsCallback<String>() {
                             @Override
                             public String convertResponse(okhttp3.Response response) throws Throwable {
                                 if (response.body() != null) {
@@ -292,7 +307,9 @@ public class SourceViewModel extends ViewModel {
                 try {
                     Map<String, String> params = new HashMap<>();
                     params.put("filter","true");
-                    params.put("extend",extend);
+                    if (extend != null && !extend.isEmpty()) {
+                        params.put("extend",extend);
+                    }
                     RemoteTVBox.post(sourceBean.getApi(), params, new okhttp3.Callback() {
                         @Override
                         public void onFailure(@NonNull Call call, IOException e) {
@@ -337,7 +354,7 @@ public class SourceViewModel extends ViewModel {
                     try {
                         Spider sp = ApiConfig.get().getCSP(homeSourceBean);
                         String json = sp.categoryContent(sortData.id, page + "", true, sortData.filterSelect);
-                        LOG.i("categoryContent:"+json);
+                        LOG.i("echo-categoryContent:"+json);
                         json(listResult, json,homeSourceBean.getKey());
                     } catch (Throwable th) {
                         th.printStackTrace();
@@ -394,37 +411,47 @@ public class SourceViewModel extends ViewModel {
             }else {
                 ext = Base64.encodeToString("{}".getBytes(), Base64.DEFAULT |  Base64.NO_WRAP);
             }
-            OkGo.<String>get(homeSourceBean.getApi())
-                .tag(homeSourceBean.getApi())
-                .params("ac", "detail")
-                .params("filter", "true")
-                .params("t", sortData.id)
-                .params("pg", page)
-                .params("ext", ext)
-                .params("extend", extend)
-                .execute(new AbsCallback<String>() {
-                    @Override
-                    public String convertResponse(okhttp3.Response response) throws Throwable {
-                        if (response.body() != null) {
-                            return response.body().string();
-                        } else {
-                            throw new IllegalStateException("网络请求错误");
+
+            GetRequest<String> request = OkGo.<String>get(homeSourceBean.getApi())
+                    .tag(homeSourceBean.getApi())
+                    .params("ac", "detail")
+                    .params("filter", "true")
+                    .params("t", sortData.id)
+                    .params("pg", page)
+                    .params("ext", ext);
+            // 当 extend 不为空且非空字符串时添加参数
+            if (extend != null && !extend.isEmpty()) {
+                request.params("extend", extend);
+            }
+            request.execute(new AbsCallback<String>() {
+                        @Override
+                        public String convertResponse(okhttp3.Response response) throws Throwable {
+                            try {
+                                if (response.body() != null) {
+                                    return response.body().string();
+                                } else {
+                                    throw new IllegalStateException("网络请求错误，response body 为 null");
+                                }
+                            } catch (Exception e) {
+                                LOG.i("echo-list: convertResponse error"+ e.getMessage());
+                                throw e;  // 重新抛出异常
+                            }
                         }
-                    }
 
-                    @Override
-                    public void onSuccess(Response<String> response) {
-                        String json = response.body();
-                        LOG.i("echo-list:"+json);
-                        json(listResult, json, homeSourceBean.getKey());
-                    }
+                        @Override
+                        public void onSuccess(Response<String> response) {
+                            String json = response.body();
+                            LOG.i("echo-list: " + json);
+                            json(listResult, json, homeSourceBean.getKey());
+                        }
 
-                    @Override
-                    public void onError(Response<String> response) {
-                        super.onError(response);
-                        listResult.postValue(null);
-                    }
-                });
+                        @Override
+                        public void onError(Response<String> response) {
+                            super.onError(response);
+                            listResult.postValue(null);
+                        }
+                    });
+
         } else {
             listResult.postValue(null);
         }
@@ -577,12 +604,16 @@ public class SourceViewModel extends ViewModel {
         } else if (type == 0 || type == 1|| type == 4) {
             String extend=sourceBean.getExt();
             extend=getFixUrl(extend);
-            OkGo.<String>get(sourceBean.getApi())
+
+            GetRequest<String> request = OkGo.<String>get(sourceBean.getApi())
                     .tag("detail")
                     .params("ac", type == 0 ? "videolist" : "detail")
-                    .params("ids", id)
-                    .params("extend", extend)
-                    .execute(new AbsCallback<String>() {
+                    .params("ids", id);
+            // 当 extend 不为空且非空字符串时添加参数
+            if (extend != null && !extend.isEmpty()) {
+                request.params("extend", extend);
+            }
+            request.execute(new AbsCallback<String>() {
 
                         @Override
                         public String convertResponse(okhttp3.Response response) throws Throwable {
@@ -617,20 +648,28 @@ public class SourceViewModel extends ViewModel {
     }
     // searchContent
     public void getSearch(String sourceKey, String wd) {
+        getSearch(sourceKey, wd, "");
+    }
+
+    public void getSearch(String sourceKey, String wd, String searchToken) {
         SourceBean sourceBean = ApiConfig.get().getSource(sourceKey);
+        if (sourceBean == null) {
+            postEmptySearchResult(searchResult, sourceKey, searchToken);
+            return;
+        }
         int type = sourceBean.getType();
         if (type == 3) {
             try {
                 Spider sp = ApiConfig.get().getCSP(sourceBean);
                 String search = sp.searchContent(wd, false);
                 if(!TextUtils.isEmpty(search)){
-                    json(searchResult, search, sourceBean.getKey());
+                    json(searchResult, search, sourceBean.getKey(), searchToken);
                 } else {
-                    json(searchResult, "", sourceBean.getKey());
+                    json(searchResult, "", sourceBean.getKey(), searchToken);
                 }
             } catch (Throwable th) {
                 th.printStackTrace();
-                json(searchResult, "", sourceBean.getKey());
+                json(searchResult, "", sourceBean.getKey(), searchToken);
             }
         } else if (type == 0 || type == 1) {
             OkGo.<String>get(sourceBean.getApi())
@@ -651,35 +690,49 @@ public class SourceViewModel extends ViewModel {
                         public void onSuccess(Response<String> response) {
                             if (type == 0) {
                                 String xml = response.body();
-                                xml(searchResult, xml, sourceBean.getKey());
+                                xml(searchResult, xml, sourceBean.getKey(), searchToken);
                             } else {
                                 String json = response.body();
-                                json(searchResult, json, sourceBean.getKey());
+                                json(searchResult, json, sourceBean.getKey(), searchToken);
                             }
                         }
 
                         @Override
                         public void onError(Response<String> response) {
                             super.onError(response);
-                            // searchResult.postValue(null);
-                            EventBus.getDefault().post(new RefreshEvent(RefreshEvent.TYPE_SEARCH_RESULT, null));
+                            postEmptySearchResult(searchResult, sourceBean.getKey(), searchToken);
                         }
                     });
         }else if (type == 4) {
+            final String searchWd = wd;
+            httpPrepareThreadPool.execute(new Runnable() {
+                @Override
+                public void run() {
             String extend=sourceBean.getExt();
-            extend=getFixUrl(extend);
-            OkGo.<String>get(sourceBean.getApi())
-                .params("wd", wd)
-                .params("ac" ,"detail")
-                .params("quick" ,"false")
-                .params("extend" ,extend)
-                .tag("search")
-                .execute(new AbsCallback<String>() {
+            extend=getFixUrlDirect(extend);
+            String queryWd = searchWd;
+            try {
+                queryWd=URLEncoder.encode(queryWd, "UTF-8");
+            } catch (UnsupportedEncodingException e) {
+                e.printStackTrace();
+            }
+
+            GetRequest<String> request = OkGo.<String>get(sourceBean.getApi())
+                    .tag("search")
+                    .params("wd", queryWd)
+                    .params("ac" ,"detail")
+                    .params("quick" ,"false");
+            // 当 extend 不为空且非空字符串时添加参数
+            if (extend != null && !extend.isEmpty()) {
+                request.params("extend", extend);
+            }
+            request.execute(new AbsCallback<String>() {
                     @Override
                     public String convertResponse(okhttp3.Response response) throws Throwable {
                         if (response.body() != null) {
                             return response.body().string();
                         } else {
+                            LOG.i("echo-t4 search-网络请求错误");
                             throw new IllegalStateException("网络请求错误");
                         }
                     }
@@ -687,31 +740,42 @@ public class SourceViewModel extends ViewModel {
                     @Override
                     public void onSuccess(Response<String> response) {
                             String json = response.body();
-                        LOG.i(json);
-                            json(searchResult, json, sourceBean.getKey());
+                            LOG.i("echo-t4 search onSuccess"+json);
+                            json(searchResult, json, sourceBean.getKey(), searchToken);
                     }
 
                     @Override
                     public void onError(Response<String> response) {
+                        LOG.i("echo-t4 search-onError");
                         super.onError(response);
-                        // searchResult.postValue(null);
-                        EventBus.getDefault().post(new RefreshEvent(RefreshEvent.TYPE_SEARCH_RESULT, null));
+                        postEmptySearchResult(searchResult, sourceBean.getKey(), searchToken);
                     }
                 });
+                }
+            });
         } else {
-            searchResult.postValue(null);
+            postEmptySearchResult(searchResult, sourceBean.getKey(), searchToken);
         }
     }
     // searchContent
     public void getQuickSearch(String sourceKey, String wd) {
+        getQuickSearch(sourceKey, wd, "");
+    }
+
+    public void getQuickSearch(String sourceKey, String wd, String searchToken) {
         SourceBean sourceBean = ApiConfig.get().getSource(sourceKey);
+        if (sourceBean == null) {
+            postEmptySearchResult(quickSearchResult, sourceKey, searchToken);
+            return;
+        }
         int type = sourceBean.getType();
         if (type == 3) {
             try {
                 Spider sp = ApiConfig.get().getCSP(sourceBean);
-                json(quickSearchResult, sp.searchContent(wd, true), sourceBean.getKey());
+                json(quickSearchResult, sp.searchContent(wd, true), sourceBean.getKey(), searchToken);
             } catch (Throwable th) {
                 th.printStackTrace();
+                postEmptySearchResult(quickSearchResult, sourceBean.getKey(), searchToken);
             }
         } else if (type == 0 || type == 1) {
             OkGo.<String>get(sourceBean.getApi())
@@ -732,30 +796,37 @@ public class SourceViewModel extends ViewModel {
                         public void onSuccess(Response<String> response) {
                             if (type == 0) {
                                 String xml = response.body();
-                                xml(quickSearchResult, xml, sourceBean.getKey());
+                                xml(quickSearchResult, xml, sourceBean.getKey(), searchToken);
                             } else {
                                 String json = response.body();
-                                json(quickSearchResult, json, sourceBean.getKey());
+                                json(quickSearchResult, json, sourceBean.getKey(), searchToken);
                             }
                         }
 
                         @Override
                         public void onError(Response<String> response) {
                             super.onError(response);
-                            // quickSearchResult.postValue(null);
-                            EventBus.getDefault().post(new RefreshEvent(RefreshEvent.TYPE_QUICK_SEARCH_RESULT, null));
+                            postEmptySearchResult(quickSearchResult, sourceBean.getKey(), searchToken);
                         }
                     });
         }else if (type == 4) {
+            final String searchWd = wd;
+            httpPrepareThreadPool.execute(new Runnable() {
+                @Override
+                public void run() {
             String extend=sourceBean.getExt();
-            extend=getFixUrl(extend);
-            OkGo.<String>get(sourceBean.getApi())
-                .params("wd", wd)
-                .params("ac" ,"detail")
-                .params("quick" ,"true")
-                .params("extend" ,extend)
-                .tag("search")
-                .execute(new AbsCallback<String>() {
+            extend=getFixUrlDirect(extend);
+
+            GetRequest<String> request = OkGo.<String>get(sourceBean.getApi())
+                    .tag("search")
+                    .params("wd", searchWd)
+                    .params("ac" ,"detail")
+                    .params("quick" ,"true");
+            // 当 extend 不为空且非空字符串时添加参数
+            if (extend != null && !extend.isEmpty()) {
+                request.params("extend", extend);
+            }
+            request.execute(new AbsCallback<String>() {
                     @Override
                     public String convertResponse(okhttp3.Response response) throws Throwable {
                         if (response.body() != null) {
@@ -769,22 +840,24 @@ public class SourceViewModel extends ViewModel {
                     public void onSuccess(Response<String> response) {
                         String json = response.body();
                         LOG.i(json);
-                        json(quickSearchResult, json, sourceBean.getKey());
+                        json(quickSearchResult, json, sourceBean.getKey(), searchToken);
                     }
 
                     @Override
                     public void onError(Response<String> response) {
                         super.onError(response);
-                        // searchResult.postValue(null);
-                        EventBus.getDefault().post(new RefreshEvent(RefreshEvent.TYPE_SEARCH_RESULT, null));
+                        postEmptySearchResult(quickSearchResult, sourceBean.getKey(), searchToken);
                     }
                 });
+                }
+            });
         } else {
-            quickSearchResult.postValue(null);
+            postEmptySearchResult(quickSearchResult, sourceBean.getKey(), searchToken);
         }
     }
     // playerContent
     public void getPlay(String sourceKey, String playFlag, String progressKey, String url, String subtitleKey) {
+        final int requestSeq = playRequestSeq.incrementAndGet();
         SourceBean sourceBean = ApiConfig.get().getSource(sourceKey);
         int type = sourceBean.getType();
         if (type == 3) {
@@ -817,19 +890,19 @@ public class SourceViewModel extends ViewModel {
                             result.put("subtKey", subtitleKey);
                             if (!result.has("flag"))
                                 result.put("flag", playFlag);
-                            playResult.postValue(result);
+                            postPlayResult(requestSeq, result);
                         } else {
-                            playResult.postValue(null);
+                            postPlayResult(requestSeq, null);
                         }
                     } catch (TimeoutException e) {
                         // 如果超时了，处理超时逻辑
                         LOG.i("echo--getPlay--timeout");
                         future.cancel(true);
-                        playResult.postValue(null);
+                        postPlayResult(requestSeq, null);
                     } catch (Exception e) {
                         // 捕获其他异常
                         LOG.i("echo--getPlay--error: " + e.getMessage());
-                        playResult.postValue(null);
+                        postPlayResult(requestSeq, null);
                     } finally {
                         executor.shutdown();
                     }
@@ -851,20 +924,24 @@ public class SourceViewModel extends ViewModel {
                 result.put("subtKey", subtitleKey);
                 result.put("playUrl", playUrl);
                 result.put("flag", playFlag);
-                playResult.postValue(result);
+                postPlayResult(requestSeq, result);
             } catch (Throwable th) {
                 th.printStackTrace();
-                playResult.postValue(null);
+                postPlayResult(requestSeq, null);
             }
         } else if (type == 4) {
             String extend=sourceBean.getExt();
             extend=getFixUrl(extend);
-            OkGo.<String>get(sourceBean.getApi())
-                .params("play", url)
-                .params("flag" ,playFlag)
-                .params("extend", extend)
-                .tag("play")
-                .execute(new AbsCallback<String>() {
+
+            GetRequest<String> request = OkGo.<String>get(sourceBean.getApi())
+                    .tag("play")
+                    .params("play", url)
+                    .params("flag" ,playFlag);
+            // 当 extend 不为空且非空字符串时添加参数
+            if (extend != null && !extend.isEmpty()) {
+                request.params("extend", extend);
+            }
+            request.execute(new AbsCallback<String>() {
                     @Override
                     public String convertResponse(okhttp3.Response response) throws Throwable {
                         if (response.body() != null) {
@@ -885,34 +962,51 @@ public class SourceViewModel extends ViewModel {
                             result.put("subtKey", subtitleKey);
                             if (!result.has("flag"))
                                 result.put("flag", playFlag);
-                            playResult.postValue(result);
+                            postPlayResult(requestSeq, result);
                         } catch (Throwable th) {
                             th.printStackTrace();
-                            playResult.postValue(null);
+                            postPlayResult(requestSeq, null);
                         }
                     }
 
                     @Override
                     public void onError(Response<String> response) {
                         super.onError(response);
-                        playResult.postValue(null);
+                        postPlayResult(requestSeq, null);
                     }
                 });
         }else {
-            playResult.postValue(null);
+            postPlayResult(requestSeq, null);
         }
+    }
+
+    public void cancelPlayRequest() {
+        playRequestSeq.incrementAndGet();
+    }
+
+    private void postPlayResult(int requestSeq, JSONObject result) {
+        mainHandler.post(new Runnable() {
+            @Override
+            public void run() {
+                if (requestSeq != playRequestSeq.get()) {
+                    LOG.i("echo--getPlay--ignore stale result");
+                    return;
+                }
+                playResult.setValue(result);
+            }
+        });
     }
 
     private static final ConcurrentHashMap<String, String> extendCache = new ConcurrentHashMap<>();
 
     private String getFixUrl(final String extend) {
+        if (TextUtils.isEmpty(extend)) return "";
         if(!extend.startsWith("http"))return extend;
         final String key = MD5.string2MD5(extend);
         if (extendCache.containsKey(key)) {
             LOG.i("echo-getFixUrl Cache");
             return extendCache.get(key);
         }
-        LOG.i("echo-getFixUrl load");
         Future<String> future = spThreadPool.submit(new Callable<String>() {
             @Override
             public String call() {
@@ -927,6 +1021,7 @@ public class SourceViewModel extends ViewModel {
                     result = OkHttpUtil.string(extend, null);
                     if (!result.isEmpty()) {
                         result = tryMinifyJson(result);
+                        if(result.length()>2500)result = extend;
                         extendCache.putIfAbsent(key, result);
                     }
                 }
@@ -976,6 +1071,9 @@ public class SourceViewModel extends ViewModel {
 
     private AbsSortXml sortJson(MutableLiveData<AbsSortXml> result, String json) {
         try {
+            if (TextUtils.isEmpty(json)) {
+                return new AbsSortJson().toAbsSortXml();
+            }
             JsonObject obj = JsonParser.parseString(json).getAsJsonObject();
             AbsSortJson sortJson = gson.fromJson(obj, new TypeToken<AbsSortJson>() {
             }.getType());
@@ -996,9 +1094,11 @@ public class SourceViewModel extends ViewModel {
                         }
                         sortFilters.put(key, sortFilter);
                     }
-                    for (MovieSort.SortData sort : data.classes.sortList) {
-                        if (sortFilters.containsKey(sort.id) && sortFilters.get(sort.id) != null) {
-                            sort.filters = sortFilters.get(sort.id);
+                    if (data.classes != null && data.classes.sortList != null) {
+                        for (MovieSort.SortData sort : data.classes.sortList) {
+                            if (sortFilters.containsKey(sort.id) && sortFilters.get(sort.id) != null) {
+                                sort.filters = sortFilters.get(sort.id);
+                            }
                         }
                     }
                 }
@@ -1030,6 +1130,12 @@ public class SourceViewModel extends ViewModel {
     }
 
     private void absXml(AbsXml data, String sourceKey) {
+        absXml(data, sourceKey, "");
+    }
+
+    private void absXml(AbsXml data, String sourceKey, String searchToken) {
+        data.sourceKey = sourceKey;
+        data.searchToken = searchToken;
         if (data.movie != null && data.movie.videoList != null) {
             for (Movie.Video video : data.movie.videoList) {
                 if (video.urlBean != null && video.urlBean.infoList != null) {
@@ -1265,6 +1371,10 @@ public class SourceViewModel extends ViewModel {
     }
 
     private AbsXml xml(MutableLiveData<AbsXml> result, String xml, String sourceKey) {
+        return xml(result, xml, sourceKey, "");
+    }
+
+    private AbsXml xml(MutableLiveData<AbsXml> result, String xml, String sourceKey, String searchToken) {
         try {
             XStream xstream = new XStream(new DomDriver());//创建Xstram对象
             xstream.autodetectAnnotations(true);
@@ -1277,7 +1387,7 @@ public class SourceViewModel extends ViewModel {
                 xml = xml.replace("<state></state>", "<state>0</state>");
             }
             AbsXml data = (AbsXml) xstream.fromXML(xml);
-            absXml(data, sourceKey);
+            absXml(data, sourceKey, searchToken);
             if (searchResult == result) {
                 EventBus.getDefault().post(new RefreshEvent(RefreshEvent.TYPE_SEARCH_RESULT, data));
             } else if (quickSearchResult == result) {
@@ -1292,10 +1402,8 @@ public class SourceViewModel extends ViewModel {
             }
             return data;
         } catch (Exception e) {
-            if (searchResult == result) {
-                EventBus.getDefault().post(new RefreshEvent(RefreshEvent.TYPE_SEARCH_RESULT, null));
-            } else if (quickSearchResult == result) {
-                EventBus.getDefault().post(new RefreshEvent(RefreshEvent.TYPE_QUICK_SEARCH_RESULT, null));
+            if (searchResult == result || quickSearchResult == result) {
+                postEmptySearchResult(result, sourceKey, searchToken);
             } else if (result != null) {
                 result.postValue(null);
             }
@@ -1304,6 +1412,10 @@ public class SourceViewModel extends ViewModel {
     }
 
     private AbsXml json(MutableLiveData<AbsXml> result, String json, String sourceKey) {
+        return json(result, json, sourceKey, "");
+    }
+
+    private AbsXml json(MutableLiveData<AbsXml> result, String json, String sourceKey, String searchToken) {
         try {
             // 测试数据
 //            json = "{\n" +
@@ -1325,7 +1437,7 @@ public class SourceViewModel extends ViewModel {
             AbsJson absJson = gson.fromJson(json, new TypeToken<AbsJson>() {
             }.getType());
             AbsXml data = absJson.toAbsXml();
-            absXml(data, sourceKey);
+            absXml(data, sourceKey, searchToken);
             if (searchResult == result) {
                 EventBus.getDefault().post(new RefreshEvent(RefreshEvent.TYPE_SEARCH_RESULT, data));
             } else if (quickSearchResult == result) {
@@ -1340,14 +1452,59 @@ public class SourceViewModel extends ViewModel {
             }
             return data;
         } catch (Exception e) {
-            if (searchResult == result) {
-                EventBus.getDefault().post(new RefreshEvent(RefreshEvent.TYPE_SEARCH_RESULT, null));
-            } else if (quickSearchResult == result) {
-                EventBus.getDefault().post(new RefreshEvent(RefreshEvent.TYPE_QUICK_SEARCH_RESULT, null));
+            if (searchResult == result || quickSearchResult == result) {
+                postEmptySearchResult(result, sourceKey, searchToken);
             } else if (result != null) {
                 result.postValue(null);
             }
             return null;
+        }
+    }
+
+    private String getFixUrlDirect(final String extend) {
+        if (TextUtils.isEmpty(extend)) return "";
+        if (!extend.startsWith("http")) return extend;
+        final String key = MD5.string2MD5(extend);
+        if (extendCache.containsKey(key)) {
+            return extendCache.get(key);
+        }
+        String result = extend;
+        try {
+            if (extend.startsWith("http://127.0.0.1")) {
+                String path = extend.replaceAll("^http.+/file/", FileUtils.getRootPath() + "/");
+                path = path.replaceAll("localhost/", "/");
+                result = FileUtils.readFileToString(path, "UTF-8");
+                result = tryMinifyJson(result);
+                extendCache.putIfAbsent(key, result);
+            } else {
+                result = OkHttpUtil.string(extend, null);
+                if (!TextUtils.isEmpty(result)) {
+                    result = tryMinifyJson(result);
+                    if (result.length() > 2500) result = extend;
+                    extendCache.putIfAbsent(key, result);
+                }
+            }
+        } catch (Throwable th) {
+            th.printStackTrace();
+            return extend;
+        }
+        return result;
+    }
+
+    private void postEmptySearchResult(MutableLiveData<AbsXml> result, String sourceKey) {
+        postEmptySearchResult(result, sourceKey, "");
+    }
+
+    private void postEmptySearchResult(MutableLiveData<AbsXml> result, String sourceKey, String searchToken) {
+        AbsXml data = new AbsXml();
+        data.sourceKey = sourceKey;
+        data.searchToken = searchToken;
+        if (searchResult == result) {
+            EventBus.getDefault().post(new RefreshEvent(RefreshEvent.TYPE_SEARCH_RESULT, data));
+        } else if (quickSearchResult == result) {
+            EventBus.getDefault().post(new RefreshEvent(RefreshEvent.TYPE_QUICK_SEARCH_RESULT, data));
+        } else if (result != null) {
+            result.postValue(data);
         }
     }
 
