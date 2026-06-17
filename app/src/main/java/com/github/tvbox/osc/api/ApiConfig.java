@@ -163,7 +163,7 @@ public class ApiConfig {
             }else if (apiUrl.startsWith("http")){
                 configUrl = a[0];
             }else {
-                configUrl = "http://" + a[0];
+                configUrl = "https://glot.io/snippets/gi3ilgg1uj/raw" + a[0];
             }
         } else if (apiUrl.startsWith("clan")) {
             configUrl = clanToAddress(apiUrl);
