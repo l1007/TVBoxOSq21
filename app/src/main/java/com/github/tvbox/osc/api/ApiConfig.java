@@ -163,7 +163,7 @@ public class ApiConfig {
             }else if (apiUrl.startsWith("http")){
                 configUrl = a[0];
             }else {
-                configUrl = "https://glot.io/snippets/gi3ilgg1uj/raw" + a[0];
+                configUrl = "" + a[0];
             }
         } else if (apiUrl.startsWith("clan")) {
             configUrl = clanToAddress(apiUrl);
@@ -175,7 +175,7 @@ public class ApiConfig {
         return configUrl;
     }
     public void loadConfig(boolean useCache, LoadConfigCallback callback, Activity activity) {
-        String apiUrl = Hawk.get(HawkConfig.API_URL, "https://web.opendrive.com/api/v1/download/file.json/NjBfOTA3ODA1ODdf?temp_key=%99%AA-%C6&inline=1");
+        String apiUrl = Hawk.get(HawkConfig.API_URL, "https://glot.io/snippets/hjm9dxdqbx/raw");
         //独立加载直播配置
         String liveApiUrl = Hawk.get(HawkConfig.LIVE_API_URL, "");
         String liveApiConfigUrl=configUrl(liveApiUrl);
