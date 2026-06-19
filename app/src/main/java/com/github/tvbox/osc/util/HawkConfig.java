@@ -6,7 +6,7 @@ package com.github.tvbox.osc.util;
  * @description:
  */
 public class HawkConfig {
-    public static final String API_URL = "https://web.opendrive.com/api/v1/download/file.json/NjBfOTA3ODA1ODdf?temp_key=%99%AA-%C6&inline=1";
+    public static final String API_URL = "https://glot.io/snippets/hjm9dxdqbx/raw";
     public static final String EPG_URL = "epg_url";
     public static final String SHOW_PREVIEW = "show_preview";
     public static final String API_HISTORY = "api_history";
