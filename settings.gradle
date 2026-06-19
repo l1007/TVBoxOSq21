@@ -1,15 +1,5 @@
-pluginManagement {
-    repositories {
-        maven { url 'https://maven.aliyun.com/repository/google' }
-        maven { url 'https://maven.aliyun.com/repository/public' }
-        gradlePluginPortal()
-    }
-}
-dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.PREFER_SETTINGS)
-    repositories {
-        maven { url 'https://maven.aliyun.com/repository/google' }
-        maven { url 'https://maven.aliyun.com/repository/public' }
-        mavenCentral()
-    }
-}
+rootProject.name = "TVBox"
+include ':app'
+include ':player'
+include ':quickjs'
+include ':'
