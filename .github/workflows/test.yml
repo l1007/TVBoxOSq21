@@ -59,10 +59,16 @@ jobs:
           git checkout ${{ env.commit }}
           echo "tag=$(git log --date=format:'%Y%m%d-%H%M' --pretty=format:%cd ${{ env.commitS }} -1)" >> $GITHUB_ENV
 
-      - name: Create empty local.properties 【新增修复缺失文件】
+      - name: Create empty local.properties
         if: ${{ env.commit }}
         working-directory: TVBoxOSC
         run: echo "" > local.properties
+
+      # ==========新增Python3.8环境部署==========
+      - name: Setup Python 3.8
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.8'
 
       - name: Extra Modify
         if: ${{ env.commit }}
